@@ -46,14 +46,14 @@ def get_readme_description_first_sentence(readme) -> str:
                     if sentence == "":
                         sentence += line.strip()
                     elif line.strip() != "":
-                        sentence += line.strip()
+                        sentence += ' ' + line.strip()
             return sentence
     except Exception:
         print(f"Error during reading {readme}")
         return ""
 
 
-def write_readme(workflow_telemetrys, readme_telemetrys):
+def write_readme(workflow_telemetry, readme_telemetry):
     global BRANCH
 
     ReadmeStepsManage.git_base_dir()
@@ -79,12 +79,16 @@ def write_readme(workflow_telemetrys, readme_telemetrys):
         "readmes": [],
         "notebooks": [],
     }
+    toolusecases = {
+        "readmes": [],
+        "notebooks": [],
+    }
     connections = {
         "readmes": [],
         "notebooks": [],
     }
 
-    for workflow_telemetry in workflow_telemetrys:
+    for workflow_telemetry in workflow_telemetry:
         notebook_name = f"{workflow_telemetry.name}.ipynb"
         gh_working_dir = workflow_telemetry.gh_working_dir
         pipeline_name = workflow_telemetry.workflow_name
@@ -155,12 +159,22 @@ def write_readme(workflow_telemetrys, readme_telemetrys):
                     "description": description,
                 }
             )
+        elif gh_working_dir.startswith("examples/tools/use-cases"):
+            toolusecases["notebooks"].append(
+                {
+                    "name": notebook_name,
+                    "path": notebook_path,
+                    "pipeline_name": pipeline_name,
+                    "yaml_name": yaml_name,
+                    "description": description,
+                }
+            )
         else:
             print(f"Unknown workflow type: {gh_working_dir}")
 
     # Adjust tutorial names:
 
-    for readme_telemetry in readme_telemetrys:
+    for readme_telemetry in readme_telemetry:
         if readme_telemetry.readme_name.endswith("README.md"):
             notebook_name = readme_telemetry.readme_folder.split("/")[-1]
         else:
@@ -236,6 +250,16 @@ def write_readme(workflow_telemetrys, readme_telemetrys):
                     "description": description,
                 }
             )
+        elif readme_folder.startswith("examples/tools/use-cases"):
+            toolusecases["readmes"].append(
+                {
+                    "name": notebook_name,
+                    "path": notebook_path,
+                    "pipeline_name": pipeline_name,
+                    "yaml_name": yaml_name,
+                    "description": description,
+                }
+            )
         else:
             print(f"Unknown workflow type: {readme_folder}")
 
@@ -250,6 +274,7 @@ def write_readme(workflow_telemetrys, readme_telemetrys):
         "flows": flows,
         "evaluations": evaluations,
         "chats": chats,
+        "toolusecases": toolusecases,
         "connections": connections,
         "quickstarts": quickstarts,
     }
@@ -269,16 +294,17 @@ def write_readme(workflow_telemetrys, readme_telemetrys):
 
 if __name__ == "__main__":
     input_glob = ["examples/**/*.ipynb"]
-    workflow_telemetrys = []
-    workflow_generator.main(input_glob, workflow_telemetrys)
+    workflow_telemetry = []
+    workflow_generator.main(input_glob, workflow_telemetry)
 
     input_glob_readme = [
         "examples/flows/**/README.md",
         "examples/connections/**/README.md",
         "examples/tutorials/**/chat*.md",
         "examples/tutorials/**/README.md",
+        "examples/tools/use-cases/**/README.md"
     ]
-    readme_telemetrys = []
-    readme_generator.main(input_glob_readme, readme_telemetrys)
+    readme_telemetry = []
+    readme_generator.main(input_glob_readme, readme_telemetry)
 
-    write_readme(workflow_telemetrys, readme_telemetrys)
+    write_readme(workflow_telemetry, readme_telemetry)

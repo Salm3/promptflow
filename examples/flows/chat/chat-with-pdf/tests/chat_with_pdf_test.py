@@ -1,3 +1,4 @@
+import os
 import unittest
 import promptflow
 from base_test import BaseTest
@@ -71,13 +72,16 @@ class TestChatWithPDF(BaseTest):
         self.assertEqual(details.shape[0], 3)
 
     def test_bulk_run_mapping_missing_one_column(self):
-        # in this case, run won't be created.
+        # in this case, run won't be created because the question column is missed in the data
+        data_path = os.path.join(
+            self.flow_path, "data/invalid-data-missing-column.jsonl"
+        )
         with self.assertRaises(ValidationException):
             self.create_chat_run(
                 column_mapping={
                     "question": "${data.question}",
-                    "pdf_url": "${data.pdf_url}",
-                }
+                },
+                data=data_path
             )
 
     def test_bulk_run_invalid_mapping(self):

@@ -3,12 +3,14 @@
 # ---------------------------------------------------------
 
 import collections
+import hashlib
 import json
 import logging
 import multiprocessing
 import os
 import re
 import shutil
+import sys
 import tempfile
 import zipfile
 from contextlib import contextmanager
@@ -18,20 +20,25 @@ from pathlib import Path
 from typing import IO, Any, AnyStr, Dict, List, Optional, Tuple, Union
 
 import keyring
+import pydash
 import yaml
 from cryptography.fernet import Fernet
 from filelock import FileLock
 from jinja2 import Template
 from keyring.errors import NoKeyringError
 from marshmallow import ValidationError
+from ruamel.yaml import YAML
 
 import promptflow
+from promptflow._constants import EXTENSION_UA
 from promptflow._core.tool_meta_generator import generate_tool_meta_dict_by_file
+from promptflow._core.tools_manager import gen_dynamic_list
 from promptflow._sdk._constants import (
     DAG_FILE_NAME,
     DEFAULT_ENCODING,
     FLOW_TOOLS_JSON,
     FLOW_TOOLS_JSON_GEN_TIMEOUT,
+    HOME_PROMPT_FLOW_DIR,
     KEYRING_ENCRYPTION_KEY_NAME,
     KEYRING_ENCRYPTION_LOCK_PATH,
     KEYRING_SYSTEM,
@@ -40,11 +47,13 @@ from promptflow._sdk._constants import (
     NODE_VARIANTS,
     NODES,
     PROMPT_FLOW_DIR_NAME,
+    REFRESH_CONNECTIONS_DIR_LOCK_PATH,
     USE_VARIANTS,
     VARIANTS,
     CommonYamlFields,
 )
 from promptflow._sdk._errors import (
+    ConnectionNotFoundError,
     DecryptConnectionError,
     GenerateFlowToolsJsonError,
     StoreConnectionEncryptionKeyError,
@@ -52,6 +61,7 @@ from promptflow._sdk._errors import (
 )
 from promptflow._sdk._vendor import IgnoreFile, get_ignore_file, get_upload_files_from_folder
 from promptflow._utils.context_utils import _change_working_dir, inject_sys_path
+from promptflow._utils.dataclass_serializer import serialize
 from promptflow.contracts.tool import ToolType
 
 
@@ -309,6 +319,27 @@ def _match_env_reference(val: str):
     return name
 
 
+def override_connection_config_with_environment_variable(connections: Dict[str, dict]):
+    """
+    The function will use relevant environment variable to override connection configurations. For instance, if there
+    is a custom connection named 'custom_connection' with a configuration key called 'chat_deployment_name,' the
+    function will attempt to retrieve 'chat_deployment_name' from the environment variable
+    'CUSTOM_CONNECTION_CHAT_DEPLOYMENT_NAME' by default. If the environment variable is not set, it will use the
+    original value as a fallback.
+    """
+    logger = logging.getLogger(LOGGER_NAME)
+    for connection_name, connection in connections.items():
+        values = connection.get("value", {})
+        for key, val in values.items():
+            connection_name = connection_name.replace(" ", "_")
+            env_name = f"{connection_name}_{key}".upper()
+            if env_name not in os.environ:
+                continue
+            values[key] = os.environ[env_name]
+            logger.info(f"Connection {connection_name}'s {key} is overridden with environment variable {env_name}")
+    return connections
+
+
 def resolve_connections_environment_variable_reference(connections: Dict[str, dict]):
     """The function will resolve connection secrets env var reference like api_key: ${env:KEY}"""
     for connection in connections.values():
@@ -355,7 +386,7 @@ def in_jupyter_notebook() -> bool:
 
 
 def render_jinja_template(template_path, *, trim_blocks=True, keep_trailing_newline=True, **kwargs):
-    with open(template_path, "r") as f:
+    with open(template_path, "r", encoding=DEFAULT_ENCODING) as f:
         template = Template(f.read(), trim_blocks=trim_blocks, keep_trailing_newline=keep_trailing_newline)
     return template.render(**kwargs)
 
@@ -399,7 +430,7 @@ def _sanitize_python_variable_name(name: str):
 
 
 def _get_additional_includes(yaml_path):
-    with open(yaml_path, "r") as f:
+    with open(yaml_path, "r", encoding=DEFAULT_ENCODING) as f:
         flow_dag = yaml.safe_load(f)
     return flow_dag.get("additional_includes", [])
 
@@ -528,7 +559,7 @@ class PromptflowIgnoreFile(IgnoreFile):
         return result
 
 
-def _generate_metas_from_files(
+def _generate_meta_from_files(
     tools: List[Tuple[str, str]], flow_directory: Path, tools_dict: dict, exception_dict: dict
 ) -> None:
     with _change_working_dir(flow_directory), inject_sys_path(flow_directory):
@@ -553,7 +584,7 @@ def _generate_tool_meta(
     tools_dict = manager.dict()
     exception_dict = manager.dict()
     p = multiprocessing.Process(
-        target=_generate_metas_from_files, args=(tools, flow_directory, tools_dict, exception_dict)
+        target=_generate_meta_from_files, args=(tools, flow_directory, tools_dict, exception_dict)
     )
     p.start()
     p.join(timeout=timeout)
@@ -594,7 +625,29 @@ def _generate_tool_meta(
     return res
 
 
-def _generate_package_tools() -> dict:
+def _gen_dynamic_list(function_config: Dict) -> List:
+    """Generate dynamic list for a tool input.
+
+    :param function_config: function config in tool meta. Should contain'func_path' and 'func_kwargs'.
+    :return: a list of tool input dynamic enums.
+    """
+    func_path = function_config.get("func_path", "")
+    func_kwargs = function_config.get("func_kwargs", {})
+    # May call azure control plane api in the custom function to list Azure resources.
+    # which may need Azure workspace triple.
+    # TODO: move this method to a common place.
+    from promptflow._cli._utils import get_workspace_triad_from_local
+
+    workspace_triad = get_workspace_triad_from_local()
+
+    if workspace_triad.subscription_id and workspace_triad.resource_group_name and workspace_triad.workspace_name:
+        return gen_dynamic_list(func_path, func_kwargs, workspace_triad._asdict())
+    # if no workspace triple available, just skip.
+    else:
+        return gen_dynamic_list(func_path, func_kwargs)
+
+
+def _generate_package_tools(keys: Optional[List[str]] = None) -> dict:
     import imp
 
     import pkg_resources
@@ -603,7 +656,7 @@ def _generate_package_tools() -> dict:
 
     from promptflow._core.tools_manager import collect_package_tools
 
-    return collect_package_tools()
+    return collect_package_tools(keys=keys)
 
 
 def generate_flow_tools_json(
@@ -613,6 +666,9 @@ def generate_flow_tools_json(
     timeout: int = FLOW_TOOLS_JSON_GEN_TIMEOUT,
     *,
     include_errors_in_output: bool = False,
+    target_source: str = None,
+    used_packages_only: bool = False,
+    source_path_mapping: Dict[str, List[str]] = None,
 ) -> dict:
     """Generate flow.tools.json for a flow directory.
 
@@ -620,33 +676,57 @@ def generate_flow_tools_json(
     :param dump: whether to dump to .promptflow/flow.tools.json, default value is True.
     :param raise_error: whether to raise the error, default value is True.
     :param timeout: timeout for generation, default value is 60 seconds.
+    :param include_errors_in_output: whether to include error messages in output, default value is False.
+    :param target_source: the source name to filter result, default value is None.
+    :param used_packages_only: whether to only include used packages, default value is False.
+    :param source_path_mapping: if specified, record yaml paths for each source.
     """
     flow_directory = Path(flow_directory).resolve()
     # parse flow DAG
-    with open(flow_directory / DAG_FILE_NAME, "r") as f:
+    with open(flow_directory / DAG_FILE_NAME, "r", encoding=DEFAULT_ENCODING) as f:
         data = yaml.safe_load(f)
     tools = []  # List[Tuple[source_file, tool_type]]
-    for node in data[NODES]:
-        if "source" in node and "type" in node:
-            if node["source"]["type"] != "code":
-                pass
-            # should get message if source file not exists
-            else:
-                tools.append((node["source"]["path"], node["type"].lower()))
+    used_packages = set()
+
+    def process_node(_node, _node_path):
+        source, tool_type = pydash.get(_node, "source.path", None), _node.get("type", None)
+        if target_source and source != target_source:
+            return
+        used_packages.add(pydash.get(_node, "source.tool", None))
+
+        if source is None or tool_type is None:
+            return
+
+        if tool_type == ToolType.CUSTOM_LLM:
+            tool_type = ToolType.PROMPT
+
+        if pydash.get(_node, "source.type") not in ["code", "package_with_prompt"]:
+            return
+        tools.append((source, tool_type.lower()))
+        if source_path_mapping is not None:
+            if source not in source_path_mapping:
+                source_path_mapping[source] = []
+
+            source_path_mapping[source].append(f"{_node_path}.source.path")
+
+    for node_i, node in enumerate(data[NODES]):
+        process_node(node, f"{NODES}.{node_i}")
+
         # understand DAG to parse variants
         # TODO: should we allow source to appear both in node and node variants?
         if node.get(USE_VARIANTS) is True:
             node_variants = data[NODE_VARIANTS][node["name"]]
             for variant_id in node_variants[VARIANTS]:
                 current_node = node_variants[VARIANTS][variant_id][NODE]
-                if "source" not in current_node or "type" not in current_node["source"]:
-                    continue
-                # should get message if source file not exists
-                tools.append((current_node["source"]["path"], current_node["type"].lower()))
+                process_node(current_node, f"{NODE_VARIANTS}.{node['name']}.{VARIANTS}.{variant_id}.{NODE}")
+
+    if None in used_packages:
+        used_packages.remove(None)
 
     # generate content
+    # TODO: remove type in tools (input) and code (output)
     flow_tools = {
-        "package": _generate_package_tools(),
+        "package": _generate_package_tools(keys=list(used_packages) if used_packages_only else None),
         "code": _generate_tool_meta(
             flow_directory,
             tools,
@@ -666,14 +746,33 @@ def generate_flow_tools_json(
     return flow_tools
 
 
-def setup_user_agent_to_operation_context(user_agent):
+def update_user_agent_from_env_var():
+    """Update user agent from env var to OperationContext"""
     from promptflow._core.operation_context import OperationContext
 
     if "USER_AGENT" in os.environ:
         # Append vscode or other user agent from env
         OperationContext.get_instance().append_user_agent(os.environ["USER_AGENT"])
+
+
+def setup_user_agent_to_operation_context(user_agent):
+    """Setup user agent to OperationContext"""
+    from promptflow._core.operation_context import OperationContext
+
+    update_user_agent_from_env_var()
     # Append user agent
-    OperationContext.get_instance().append_user_agent(user_agent)
+    context = OperationContext.get_instance()
+    context.append_user_agent(user_agent)
+    return context.get_user_agent()
+
+
+def call_from_extension() -> bool:
+    """Return true if current request is from extension."""
+    from promptflow._core.operation_context import OperationContext
+
+    update_user_agent_from_env_var()
+    context = OperationContext().get_instance()
+    return EXTENSION_UA in context.get_user_agent()
 
 
 def generate_random_string(length: int = 6) -> str:
@@ -701,3 +800,100 @@ def copy_tree_respect_template_and_ignore_file(source: Path, target: Path, rende
                 .encode("utf-8")
                 .replace(b"\r\n", b"\n"),
             )
+
+
+def get_local_connections_from_executable(executable, client):
+    """Get local connections from executable.
+
+    Please avoid using this function anymore, and we should remove this function once all references are removed.
+    """
+
+    connection_names = executable.get_connection_names()
+    result = {}
+    for n in connection_names:
+        try:
+            conn = client.connections.get(name=n, with_secrets=True)
+            result[n] = conn._to_execution_connection_dict()
+        except ConnectionNotFoundError:
+            # ignore when connection not found since it can be configured with env var.
+            raise Exception(f"Connection {n!r} required for flow {executable.name!r} is not found.")
+    return result
+
+
+def _generate_connections_dir():
+    # Get Python executable path
+    python_path = sys.executable
+
+    # Hash the Python executable path
+    hash_object = hashlib.sha1(python_path.encode())
+    hex_dig = hash_object.hexdigest()
+
+    # Generate the connections system path using the hash
+    connections_dir = (HOME_PROMPT_FLOW_DIR / "envs" / hex_dig / "connections").resolve()
+    return connections_dir
+
+
+_refresh_connection_dir_lock = FileLock(REFRESH_CONNECTIONS_DIR_LOCK_PATH)
+
+
+# This function is used by extension to generate the connection files every time collect tools.
+def refresh_connections_dir(connection_spec_files, connection_template_yamls):
+    connections_dir = _generate_connections_dir()
+
+    # Use lock to prevent concurrent access
+    with _refresh_connection_dir_lock:
+        if os.path.isdir(connections_dir):
+            shutil.rmtree(connections_dir)
+        os.makedirs(connections_dir)
+
+        if connection_spec_files and connection_template_yamls:
+            for connection_name, content in connection_spec_files.items():
+                file_name = connection_name + ".spec.json"
+                with open(connections_dir / file_name, "w", encoding=DEFAULT_ENCODING) as f:
+                    json.dump(content, f, indent=2)
+
+            # use YAML to dump template file in order to keep the comments
+            yaml = YAML()
+            yaml.preserve_quotes = True
+            for connection_name, content in connection_template_yamls.items():
+                yaml_data = yaml.load(content)
+                file_name = connection_name + ".template.yaml"
+                with open(connections_dir / file_name, "w", encoding=DEFAULT_ENCODING) as f:
+                    yaml.dump(yaml_data, f)
+
+
+def dump_flow_result(flow_folder, prefix, flow_result=None, node_result=None):
+    """Dump flow result for extension.
+
+    :param flow_folder: The flow folder.
+    :param prefix: The file prefix.
+    :param flow_result: The flow result returned by exec_line.
+    :param node_result: The node result when test node returned by load_and_exec_node.
+    """
+    if flow_result:
+        flow_serialize_result = {
+            "flow_runs": [serialize(flow_result.run_info)],
+            "node_runs": [serialize(run) for run in flow_result.node_run_infos.values()],
+        }
+    else:
+        flow_serialize_result = {
+            "flow_runs": [],
+            "node_runs": [serialize(node_result)],
+        }
+    dump_folder = Path(flow_folder) / PROMPT_FLOW_DIR_NAME
+    dump_folder.mkdir(parents=True, exist_ok=True)
+
+    with open(dump_folder / f"{prefix}.detail.json", "w") as f:
+        json.dump(flow_serialize_result, f, indent=2)
+    if node_result:
+        metrics = flow_serialize_result["node_runs"][0]["metrics"]
+        output = flow_serialize_result["node_runs"][0]["output"]
+    else:
+        metrics = flow_serialize_result["flow_runs"][0]["metrics"]
+        output = flow_serialize_result["flow_runs"][0]["output"]
+    if metrics:
+        with open(dump_folder / f"{prefix}.metrics.json", "w") as f:
+            json.dump(metrics, f, indent=2)
+    if output:
+        with open(dump_folder / f"{prefix}.output.json", "w") as f:
+            json.dump(output, f, indent=2)

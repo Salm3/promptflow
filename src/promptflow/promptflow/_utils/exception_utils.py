@@ -8,7 +8,6 @@ from enum import Enum
 from traceback import TracebackException, format_tb
 from types import TracebackType
 
-from promptflow._constants import ERROR_RESPONSE_COMPONENT_NAME
 from promptflow.exceptions import PromptflowException, SystemErrorException, UserErrorException, ValidationException
 
 ADDITIONAL_INFO_USER_EXECUTION_ERROR = "ToolExecutionErrorDetails"
@@ -107,14 +106,14 @@ class ErrorResponse:
         return user_execution_error_info
 
     def to_dict(self):
-        from promptflow._utils.utils import get_runtime_version
+        from promptflow._core.operation_context import OperationContext
 
         return {
             "error": self._error_dict,
             "correlation": None,  # TODO: to be implemented
             "environment": None,  # TODO: to be implemented
             "location": None,  # TODO: to be implemented
-            "componentName": f"{ERROR_RESPONSE_COMPONENT_NAME}/{get_runtime_version()}",
+            "componentName": OperationContext.get_instance().get_user_agent(),
             "time": datetime.utcnow().isoformat(),
         }
 
@@ -159,7 +158,7 @@ class ErrorResponse:
 class ExceptionPresenter:
     """A class that can extract information from the exception instance.
 
-    It is designed to work for both PropmtflowException and other exceptions.
+    It is designed to work for both PromptflowException and other exceptions.
     """
 
     def __init__(self, ex: Exception):
@@ -199,55 +198,47 @@ class ExceptionPresenter:
             "innerException": inner_exception,
         }
 
-    def to_dict(self, *, include_debug_info=False):
-        """Return a dict representation of the exception.
+    @property
+    def error_codes(self):
+        """The hierarchy of the error codes.
 
-        This dict specification corresponds to the specification of the Microsoft API Guidelines:
+        We follow the "Microsoft REST API Guidelines" to define error codes in a hierarchy style.
+        See the below link for details:
         https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md#7102-error-condition-responses
 
-        Note that this dict representation the "error" field in the response body of the API.
-        The whole error response is then populated in another place outside of this class.
+        This method returns the error codes in a list. It will be converted into a nested json format by
+        error_code_recursed.
         """
-        if isinstance(self._ex, JsonSerializedPromptflowException):
-            return self._ex.to_dict(include_debug_info=include_debug_info)
+        return [infer_error_code_from_class(SystemErrorException), self._ex.__class__.__name__]
 
-        # Otherwise, return general dict representation of the exception.
-        result = {
-            "code": infer_error_code_from_class(SystemErrorException),
-            "message": str(self._ex),
-            "messageFormat": "",
-            "messageParameters": {},
-            "innerError": {
-                "code": self._ex.__class__.__name__,
-                "innerError": None,
-            },
-        }
-        if include_debug_info:
-            result["debugInfo"] = self.debug_info
-
-        return result
-
-
-class PromptflowExceptionPresenter(ExceptionPresenter):
     @property
     def error_code_recursed(self):
         """Returns a dict of the error codes for this exception.
 
         It is populated in a recursive manner, using the source from `error_codes` property.
-        i.e. For ToolExcutionError which inherits from UserErrorException,
+        i.e. For PromptflowException, such as ToolExcutionError which inherits from UserErrorException,
         The result would be:
 
           {
-            "code": "UserErrorException",
+            "code": "UserError",
             "innerError": {
               "code": "ToolExecutionError",
               "innerError": None,
             },
           }
 
+        For other exception types, such as ValueError, the result would be:
+
+          {
+            "code": "SystemError",
+            "innerError": {
+              "code": "ValueError",
+              "innerError": None,
+            },
+          }
         """
         current_error = None
-        reversed_error_codes = reversed(self._ex.error_codes) if self._ex.error_codes else []
+        reversed_error_codes = reversed(self.error_codes) if self.error_codes else []
         for code in reversed_error_codes:
             current_error = {
                 "code": code,
@@ -257,6 +248,53 @@ class PromptflowExceptionPresenter(ExceptionPresenter):
         return current_error
 
     def to_dict(self, *, include_debug_info=False):
+        """Return a dict representation of the exception.
+
+        This dict specification corresponds to the specification of the Microsoft API Guidelines:
+        https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md#7102-error-condition-responses
+
+        Note that this dict represents the "error" field in the response body of the API.
+        The whole error response is then populated in another place outside of this class.
+        """
+        if isinstance(self._ex, JsonSerializedPromptflowException):
+            return self._ex.to_dict(include_debug_info=include_debug_info)
+
+        # Otherwise, return general dict representation of the exception.
+        result = {"message": str(self._ex), "messageFormat": "", "messageParameters": {}}
+        result.update(self.error_code_recursed)
+
+        if include_debug_info:
+            result["debugInfo"] = self.debug_info
+
+        return result
+
+
+class PromptflowExceptionPresenter(ExceptionPresenter):
+    @property
+    def error_codes(self):
+        """The hierarchy of the error codes.
+
+        We follow the "Microsoft REST API Guidelines" to define error codes in a hierarchy style.
+        See the below link for details:
+        https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md#7102-error-condition-responses
+
+        For subclass of PromptflowException, use the ex.error_codes directly.
+
+        For PromptflowException (not a subclass), the ex.error_code is None.
+        The result should be:
+        ["SystemError", {inner_exception type name if exist}]
+        """
+        if self._ex.error_codes:
+            return self._ex.error_codes
+
+        # For PromptflowException (not a subclass), the ex.error_code is None.
+        # Handle this case specifically.
+        error_codes = [infer_error_code_from_class(SystemErrorException)]
+        if self._ex.inner_exception:
+            error_codes.append(infer_error_code_from_class(self._ex.inner_exception.__class__))
+        return error_codes
+
+    def to_dict(self, *, include_debug_info=False):
         result = {
             "message": self._ex.message,
             "messageFormat": self._ex.message_format,
@@ -264,20 +302,7 @@ class PromptflowExceptionPresenter(ExceptionPresenter):
             "referenceCode": self._ex.reference_code,
         }
 
-        if self.error_code_recursed:
-            result.update(self.error_code_recursed)
-        else:
-            # For PromptflowException (not a subclass), the error_code_recursed is None.
-            # Handle this case specifically.
-            result["code"] = infer_error_code_from_class(SystemErrorException)
-            if self._ex.inner_exception:
-                # Set the type of inner_exception as the inner error
-                result["innerError"] = {
-                    "code": infer_error_code_from_class(self._ex.inner_exception.__class__),
-                    "innerError": None,
-                }
-            else:
-                result["innerError"] = None
+        result.update(self.error_code_recursed)
         if self._ex.additional_info:
             result["additionalInfo"] = [{"type": k, "info": v} for k, v in self._ex.additional_info.items()]
         if include_debug_info:
@@ -288,7 +313,7 @@ class PromptflowExceptionPresenter(ExceptionPresenter):
 
 class JsonSerializedPromptflowException(Exception):
     """Json serialized PromptflowException.
-    This exception only has one argument message to voide the
+    This exception only has one argument message to avoid the
     argument missing error when load/dump with pickle in multiprocessing.
     Ref: https://bugs.python.org/issue32696
 

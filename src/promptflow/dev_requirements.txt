@@ -15,7 +15,10 @@ azure-mgmt-storage==21.0.0
 # Note: This is possibly-insecure, do not add this to setup.
 keyrings.alt
 
---extra-index-url https://azuremlsdktestpypi.azureedge.net/promptflow
 promptflow-tools
 
 beautifulsoup4==4.12.2
+# record and replay http requests for pfazure tests
+vcrpy==5.1.0
+# parse token to get tenant id during sanitization
+PyJWT==2.8.0

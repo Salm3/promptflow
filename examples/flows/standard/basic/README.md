@@ -42,8 +42,11 @@ pf flow test --flow . --node llm --inputs prompt="Write a simple Hello World pro
 - Create run with multiple lines data
 ```bash
 # using environment from .env file (loaded in user code: hello.py)
-pf run create --flow . --data ./data.jsonl --stream
+pf run create --flow . --data ./data.jsonl --column-mapping text='${data.text}' --stream
 ```
+
+You can also skip providing `column-mapping` if provided data has same column name as the flow.
+Reference [here](https://aka.ms/pf/column-mapping) for default behavior when `column-mapping` not provided in CLI.
 
 - List and show run meta
 ```bash
@@ -51,7 +54,7 @@ pf run create --flow . --data ./data.jsonl --stream
 pf run list
 
 # get a sample run name
-name=$(pf run list -r 10 | jq '.[] | select(.name | contains("basic_default")) | .name'| head -n 1 | tr -d '"')
+name=$(pf run list -r 10 | jq '.[] | select(.name | contains("basic_variant_0")) | .name'| head -n 1 | tr -d '"')
 
 # show specific run detail
 pf run show --name $name
@@ -87,12 +90,12 @@ pf flow test --flow . --environment-variables AZURE_OPENAI_API_KEY='${open_ai_co
 - Create run using connection secret binding specified in environment variables, see [run.yml](run.yml)
 ```bash
 # create run
-pf run create --flow . --data ./data.jsonl --stream --environment-variables AZURE_OPENAI_API_KEY='${open_ai_connection.api_key}' AZURE_OPENAI_API_BASE='${open_ai_connection.api_base}'
+pf run create --flow . --data ./data.jsonl --stream --environment-variables AZURE_OPENAI_API_KEY='${open_ai_connection.api_key}' AZURE_OPENAI_API_BASE='${open_ai_connection.api_base}' --column-mapping text='${data.text}'
 # create run using yaml file
 pf run create --file run.yml --stream
 
 # show outputs
-name=$(pf run list -r 10 | jq '.[] | select(.name | contains("basic_default")) | .name'| head -n 1 | tr -d '"')
+name=$(pf run list -r 10 | jq '.[] | select(.name | contains("basic_variant_0")) | .name'| head -n 1 | tr -d '"')
 pf run show-details --name $name
 ```
 
@@ -107,9 +110,9 @@ az configure --defaults group=<your_resource_group_name> workspace=<your_workspa
 - Create run
 ```bash
 # run with environment variable reference connection in azureml workspace 
-pfazure run create --flow . --data ./data.jsonl --environment-variables AZURE_OPENAI_API_KEY='${open_ai_connection.api_key}' AZURE_OPENAI_API_BASE='${open_ai_connection.api_base}' --stream --runtime demo-mir
+pfazure run create --flow . --data ./data.jsonl --environment-variables AZURE_OPENAI_API_KEY='${open_ai_connection.api_key}' AZURE_OPENAI_API_BASE='${open_ai_connection.api_base}' --column-mapping text='${data.text}' --stream --runtime example-runtime-ci
 # run using yaml file
-pfazure run create --file run.yml --stream --runtime demo-mir
+pfazure run create --file run.yml --stream --runtime example-runtime-ci
 ```
 
 - List and show run meta
@@ -118,7 +121,7 @@ pfazure run create --file run.yml --stream --runtime demo-mir
 pfazure run list -r 3
 
 # get a sample run name
-name=$(pfazure run list -r 100 | jq '.[] | select(.name | contains("basic_default")) | .name'| head -n 1 | tr -d '"')
+name=$(pfazure run list -r 100 | jq '.[] | select(.name | contains("basic_variant_0")) | .name'| head -n 1 | tr -d '"')
 
 # show specific run detail
 pfazure run show --name $name

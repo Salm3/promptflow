@@ -8,14 +8,15 @@ from rewrite_question import rewrite_question
 from build_index import create_faiss_index
 from download import download
 from utils.lock import acquire_lock
+from constants import PDF_DIR, INDEX_DIR
 
 
 def chat_with_pdf(question: str, pdf_url: str, history: list):
     with acquire_lock("create_folder.lock"):
-        if not os.path.exists(".pdfs"):
-            os.mkdir(".pdfs")
-        if not os.path.exists(".index/.pdfs"):
-            os.makedirs(".index/.pdfs")
+        if not os.path.exists(PDF_DIR):
+            os.mkdir(PDF_DIR)
+        if not os.path.exists(INDEX_DIR):
+            os.makedirs(INDEX_DIR)
 
     pdf_path = download(pdf_url)
     index_path = create_faiss_index(pdf_path)
@@ -37,7 +38,7 @@ def print_stream_and_return_full_answer(stream):
 
 
 def main_loop(url: str):
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
     history = []
     while True:
@@ -64,4 +65,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main_loop("https://arxiv.org/pdf/1810.04805.pdf")
+    main()

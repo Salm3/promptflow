@@ -12,6 +12,9 @@ on:
     paths: [ examples/flows/chat/chat-with-pdf/**, examples/*requirements.txt, .github/workflows/samples_flows_chat_chatwithpdf_chatwithpdfazure.yml ]
   workflow_dispatch:
 
+env:
+  IS_IN_CI_PIPELINE: "true"
+
 jobs:
   samples_notebook_ci:
     runs-on: ubuntu-latest
@@ -19,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Generate config.json
-        run: echo ${{ secrets.TEST_WORKSPACE_CONFIG_JSON }} > ${{ github.workspace }}/examples/config.json
+        run: echo '${{ secrets.TEST_WORKSPACE_CONFIG_JSON_CANARY }}' > ${{ github.workspace }}/examples/config.json
       - name: Setup Python 3.9 environment
         uses: actions/setup-python@v4
         with:

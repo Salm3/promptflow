@@ -7,7 +7,7 @@
 
 **Install dependencies**
 
-- Bootstrap your python environment. 
+- Bootstrap your python environment.
   - e.g: create a new [conda](https://conda.io/projects/conda/en/latest/user-guide/getting-started.html) environment. `conda create -n pf-examples python=3.9`.
   - install required packages in python environment : `pip install -r requirements.txt`
     - show installed sdk: `pip show promptflow`
@@ -30,7 +30,7 @@
 
 ### Flows ([flows](flows))
 
-#### [Standard flows](flows/standard/) 
+#### [Standard flows](flows/standard/)
 
 | path | status | description |
 ------|--------|-------------
@@ -49,6 +49,13 @@
 | path | status | description |
 ------|--------|-------------
 {% for chat in chats.readmes %}| [{{ chat.name }}]({{ chat.path }}) | [![{{chat.pipeline_name}}](https://github.com/microsoft/promptflow/actions/workflows/{{chat.yaml_name}}/badge.svg?branch={{branch}})](https://github.com/microsoft/promptflow/actions/workflows/{{chat.yaml_name}}) | {{ chat.description }} |
+{% endfor %}
+
+### Tool Use Cases ([Tool Use Cases](tools/use-cases))
+
+| path | status | description |
+------|--------|-------------
+{% for toolusecase in toolusecases.readmes %}| [{{ toolusecase.name }}]({{ toolusecase.path }}) | [![{{toolusecase.pipeline_name}}](https://github.com/microsoft/promptflow/actions/workflows/{{toolusecase.yaml_name}}/badge.svg?branch={{branch}})](https://github.com/microsoft/promptflow/actions/workflows/{{toolusecase.yaml_name}}) | {{ toolusecase.description }} |
 {% endfor %}
 
 ### Connections ([connections](connections))

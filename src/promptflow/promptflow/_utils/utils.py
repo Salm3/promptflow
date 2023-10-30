@@ -5,6 +5,7 @@
 """This is a common util file.
 !!!Please do not include any project related import.!!!
 """
+import contextlib
 import contextvars
 import functools
 import importlib
@@ -17,6 +18,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, TypeVar, Union
+
+from promptflow._constants import DEFAULT_ENCODING
 
 T = TypeVar("T")
 
@@ -43,9 +46,24 @@ class DateTimeEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, o)
 
 
+def is_json_serializable(value: Any) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except TypeError:
+        return False
+
+
 def load_json(file_path: Union[str, Path]) -> dict:
     with open(file_path, "r") as f:
         return json.load(f)
+
+
+def dump_list_to_jsonl(file_path: Union[str, Path], list_data: List[Dict]):
+    with open(file_path, "w", encoding=DEFAULT_ENCODING) as jsonl_file:
+        for data in list_data:
+            json.dump(data, jsonl_file)
+            jsonl_file.write("\n")
 
 
 def transpose(values: List[Dict[str, Any]], keys: Optional[List] = None) -> Dict[str, List]:
@@ -117,10 +135,22 @@ def count_and_log_progress(
         yield item
 
 
-def log_progress(logger: logging.Logger, count: int, total_count: int, formatter="{count} / {total_count} finished."):
+def log_progress(
+    run_start_time: datetime,
+    logger: logging.Logger,
+    count: int,
+    total_count: int,
+    formatter="{count} / {total_count} finished.",
+):
     log_interval = max(int(total_count / 10), 1)
-    if count % log_interval == 0 or count == total_count:
+    if count > 0 and (count % log_interval == 0 or count == total_count):
+        average_execution_time = round((datetime.now().timestamp() - run_start_time.timestamp()) / count, 2)
+        estimated_execution_time = round(average_execution_time * (total_count - count), 2)
         logger.info(formatter.format(count=count, total_count=total_count))
+        logger.info(
+            f"Average execution time for completed lines: {average_execution_time} seconds. "
+            f"Estimated time for incomplete lines: {estimated_execution_time} seconds."
+        )
 
 
 def extract_user_frame_summaries(frame_summaries: List[traceback.FrameSummary]):
@@ -168,20 +198,26 @@ def set_context(context: contextvars.Context):
         var.set(value)
 
 
-# TODO: refactor and use pf version, for EPR
-# used in exceptions.py ("componentName": f"{ERROR_RESPONSE_COMPONENT_NAME}/{get_runtime_version()}",)
-def get_runtime_version():
-    build_info = os.environ.get("BUILD_INFO", "")
-    try:
-        build_info_dict = json.loads(build_info)
-        return build_info_dict["build_number"]
-    except Exception:
-        return "unknown"
-
-
 def convert_inputs_mapping_to_param(inputs_mapping: dict):
     """Use this function to convert inputs_mapping to a string that can be passed to component as a string parameter,
     we have to do this since we can't pass a dict as a parameter to component.
     # TODO: Finalize the format of inputs_mapping
     """
     return ",".join([f"{k}={v}" for k, v in inputs_mapping.items()])
+
+
+@contextlib.contextmanager
+def environment_variable_overwrite(key, val):
+    if key in os.environ.keys():
+        backup_value = os.environ[key]
+    else:
+        backup_value = None
+    os.environ[key] = val
+
+    try:
+        yield
+    finally:
+        if backup_value:
+            os.environ[key] = backup_value
+        else:
+            os.environ.pop(key)

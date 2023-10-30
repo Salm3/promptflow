@@ -3,8 +3,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Union
-
+from typing import Union, List
 from promptflow import tool
 from azure_open_ai import ChatLLM
 from divider import Divider
@@ -28,7 +27,7 @@ def get_imports(content):
     return import_statements
 
 
-async def agenerate_docstring(divided: list[str]):
+async def async_generate_docstring(divided: List[str]):
     llm = ChatLLM()
     divided = list(reversed(divided))
     all_divided = []
@@ -61,7 +60,7 @@ async def agenerate_docstring(divided: list[str]):
     last_code = ''
     for item in all_divided:
         if Divider.has_class_or_func(item):
-            tasks.append(llm.aquery(docstring_prompt(last_code=last_code, code=item, module=modules)))
+            tasks.append(llm.async_query(docstring_prompt(last_code=last_code, code=item, module=modules)))
         else:  # If the code has not function or class, no need to generate docstring.
             tasks.append(asyncio.sleep(0))
         last_code = item
@@ -77,7 +76,7 @@ async def agenerate_docstring(divided: list[str]):
 
 
 @tool
-def generate_docstring(divided: list[str],
+def generate_docstring(divided: List[str],
                        connection: Union[AzureOpenAIConnection, OpenAIConnection] = None,
                        model: str = None):
     if isinstance(connection, AzureOpenAIConnection):
@@ -93,4 +92,4 @@ def generate_docstring(divided: list[str],
 
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(agenerate_docstring(divided))
+    return asyncio.run(async_generate_docstring(divided))

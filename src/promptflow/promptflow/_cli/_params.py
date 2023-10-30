@@ -4,6 +4,9 @@
 
 import argparse
 
+# TODO: avoid azure dependency here
+MAX_LIST_CLI_RESULTS = 50
+
 
 class AppendToDictAction(argparse._AppendAction):  # pylint: disable=protected-access
     def __call__(self, parser, namespace, values, option_string=None):
@@ -74,6 +77,16 @@ def add_param_set(parser):
     )
 
 
+def add_param_set_positional(parser):
+    parser.add_argument(
+        "params_override",
+        action=AppendToDictAction,
+        help="Set an object by specifying a property path and value to set. Example: set "
+        "property1.property2=<value>.",
+        nargs="+",
+    )
+
+
 def add_param_environment_variables(parser):
     parser.add_argument(
         "--environment-variables",
@@ -102,6 +115,16 @@ def add_param_columns_mapping(parser):
         help="Inputs column mapping, use ${data.xx} to refer to data file columns, "
         "use ${run.inputs.xx} and ${run.outputs.xx} to refer to run inputs/outputs columns. Example: "
         "--column-mapping data1='${data.data1}' data2='${run.inputs.data2}' data3='${run.outputs.data3}'",
+        nargs="+",
+    )
+
+
+def add_param_set_tool_extra_info(parser):
+    parser.add_argument(
+        "--set",
+        dest="extra_info",
+        action=AppendToDictAction,
+        help="Set extra information about the tool. Example: --set <key>=<value>.",
         nargs="+",
     )
 
@@ -187,6 +210,27 @@ def add_param_variants(parser):
     )
 
 
+def add_param_max_results(parser):
+    parser.add_argument(  # noqa: E731
+        "-r",
+        "--max-results",
+        dest="max_results",
+        type=int,
+        default=MAX_LIST_CLI_RESULTS,
+        help=f"Max number of results to return. Default is {MAX_LIST_CLI_RESULTS}.",
+    )
+
+
+def add_param_all_results(parser):
+    parser.add_argument(  # noqa: E731
+        "--all-results",
+        action="store_true",
+        dest="all_results",
+        default=False,
+        help="Returns all results. Default to False.",
+    )
+
+
 def add_param_subscription(parser):
     parser.add_argument(
         "-s",
@@ -269,6 +313,15 @@ def add_param_verbose(parser):
         "--verbose",
         action="store_true",
         help="Increase logging verbosity. Use --debug for full debug logs.",
+    )
+
+
+def add_param_config(parser):
+    parser.add_argument(
+        "--config",
+        nargs="+",
+        action=AppendToDictAction,
+        help=argparse.SUPPRESS,
     )
 
 

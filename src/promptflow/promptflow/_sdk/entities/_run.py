@@ -13,7 +13,11 @@ from dateutil import parser as date_parser
 
 from promptflow._sdk._constants import (
     BASE_PATH_CONTEXT_KEY,
+    DEFAULT_VARIANT,
     PARAMS_OVERRIDE_KEY,
+    RUN_MACRO,
+    TIMESTAMP_MACRO,
+    VARIANT_ID_MACRO,
     AzureRunTypes,
     FlowRunProperties,
     RestRunTypes,
@@ -45,15 +49,53 @@ REST_RUN_TYPE_2_RUN_TYPE = {
 
 
 class Run(YAMLTranslatableMixin):
+    """Flow run entity.
+
+    :param flow: Path of the flow directory.
+    :type flow: Path
+    :param name: Name of the run.
+    :type name: Optional[str]
+    :param data: Input data for the run. Local path or remote uri(starts with azureml: or public URL) are supported. Note: remote uri is only supported for cloud run. # noqa: E501
+    :type data: Optional[str]
+    :param variant: Variant of the run.
+    :type variant: Optional[str]
+    :param run: Parent run or run ID.
+    :type run: Optional[Union[Run, str]]
+    :param column_mapping: Column mapping for the run. Optional since it's not stored in the database.
+    :type column_mapping: Optional[dict]
+    :param display_name: Display name of the run.
+    :type display_name: Optional[str]
+    :param description: Description of the run.
+    :type description: Optional[str]
+    :param tags: Tags of the run.
+    :type tags: Optional[List[Dict[str, str]]]
+    :param created_on: Date and time the run was created.
+    :type created_on: Optional[datetime.datetime]
+    :param start_time: Date and time the run started.
+    :type start_time: Optional[datetime.datetime]
+    :param end_time: Date and time the run ended.
+    :type end_time: Optional[datetime.datetime]
+    :param status: Status of the run.
+    :type status: Optional[str]
+    :param environment_variables: Environment variables for the run.
+    :type environment_variables: Optional[Dict[str, str]]
+    :param connections: Connections for the run.
+    :type connections: Optional[Dict[str, Dict]]
+    :param properties: Properties of the run.
+    :type properties: Optional[Dict[str, Any]]
+    :param kwargs: Additional keyword arguments.
+    :type kwargs: Optional[dict]
+    """
+
     def __init__(
         self,
         flow: Path,
-        name: str = None,
+        name: Optional[str] = None,
         # input fields are optional since it's not stored in DB
-        data: str = None,
-        variant: str = None,
-        run: Union["Run", str] = None,
-        column_mapping: dict = None,
+        data: Optional[str] = None,
+        variant: Optional[str] = None,
+        run: Optional[Union["Run", str]] = None,
+        column_mapping: Optional[dict] = None,
         display_name: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[Dict[str, str]]] = None,
@@ -62,26 +104,11 @@ class Run(YAMLTranslatableMixin):
         start_time: Optional[datetime.datetime] = None,
         end_time: Optional[datetime.datetime] = None,
         status: Optional[str] = None,
-        environment_variables: Dict[str, str] = None,
-        connections: Dict[str, Dict] = None,
+        environment_variables: Optional[Dict[str, str]] = None,
+        connections: Optional[Dict[str, Dict]] = None,
         properties: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
-        """Flow run.
-
-        :param name: Name of the run.
-        :type name: str
-        :param type: Type of the run, should be one of "bulk", "evaluate" or "pairwise_evaluate".
-        :type type: str
-        :param flow: Path of the flow directory.
-        :type flow: Path
-        :param display_name: Display name of the run.
-        :type display_name: str
-        :param description: Description of the run.
-        :type description: str
-        :param tags: Tags of the run.
-        :type tags: List[Dict[str, str]]
-        """
         # TODO: remove when RUN CRUD don't depend on this
         self.type = RunTypes.BATCH
         self.data = data
@@ -126,9 +153,6 @@ class Run(YAMLTranslatableMixin):
         self._resources = kwargs.get("resources", None)
         # default run name: flow directory name + timestamp
         self.name = name or self._generate_run_name()
-        # default to use name if display_name is not provided
-        if not self.display_name:
-            self.display_name = self.name
 
     @property
     def created_on(self) -> str:
@@ -174,6 +198,7 @@ class Run(YAMLTranslatableMixin):
             end_time=datetime.datetime.fromisoformat(str(obj.end_time)) if obj.end_time else None,
             status=str(obj.status),
             data=Path(obj.data).resolve().absolute().as_posix() if obj.data else None,
+            properties={FlowRunProperties.SYSTEM_METRICS: properties_json.get(FlowRunProperties.SYSTEM_METRICS, {})},
         )
 
     @classmethod
@@ -252,13 +277,15 @@ class Run(YAMLTranslatableMixin):
         )
 
     def _to_orm_object(self) -> ORMRun:
+        """Convert current run entity to ORM object."""
+        display_name = self._format_display_name()
         return ORMRun(
             name=self.name,
             created_on=self.created_on,
             status=self.status,
             start_time=self._start_time.isoformat() if self._start_time else None,
             end_time=self._end_time.isoformat() if self._end_time else None,
-            display_name=self.display_name,
+            display_name=display_name,
             description=self.description,
             tags=json.dumps(self.tags) if self.tags else None,
             properties=json.dumps(self.properties),
@@ -357,7 +384,7 @@ class Run(YAMLTranslatableMixin):
             flow_name = self._get_flow_dir().name
             variant = self.variant
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            variant = parse_variant(variant)[1] if variant else "default"
+            variant = parse_variant(variant)[1] if variant else DEFAULT_VARIANT
             run_name_prefix = f"{flow_name}_{variant}"
             # TODO(2562996): limit run name to avoid it become too long
             run_name = f"{run_name_prefix}_{timestamp}"
@@ -365,11 +392,38 @@ class Run(YAMLTranslatableMixin):
         except Exception:
             return str(uuid.uuid4())
 
+    def _get_default_display_name(self) -> str:
+        display_name = self.display_name
+        if not display_name:
+            display_name = self._get_flow_dir().name
+        return display_name
+
+    def _format_display_name(self) -> str:
+        """
+        Format display name. Replace macros in display name with actual values.
+        The following macros are supported: ${variant_id}, ${run}, ${timestamp}
+
+        For example,
+            if the display name is "run-${variant_id}-${timestamp}"
+            it will be formatted to "run-variant_1-20210901123456"
+        """
+
+        display_name = self._get_default_display_name()
+        time_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M")
+        if self.run:
+            display_name = display_name.replace(RUN_MACRO, self._validate_and_return_run_name(self.run))
+        display_name = display_name.replace(TIMESTAMP_MACRO, time_stamp)
+        variant = self.variant
+        variant = parse_variant(variant)[1] if variant else DEFAULT_VARIANT
+        display_name = display_name.replace(VARIANT_ID_MACRO, variant)
+
+        return display_name
+
     def _get_flow_dir(self) -> Path:
         flow = Path(self.flow)
         if flow.is_dir():
             return flow
-        return self.flow.parent
+        return flow.parent
 
     @classmethod
     def _get_schema_cls(self):
@@ -378,7 +432,11 @@ class Run(YAMLTranslatableMixin):
     def _to_rest_object(self):
         from azure.ai.ml._utils._storage_utils import AzureMLDatastorePathUri
 
-        from promptflow.azure._restclient.flow.models import BatchDataInput, SubmitBulkRunRequest
+        from promptflow.azure._restclient.flow.models import (
+            BatchDataInput,
+            RunDisplayNameGenerationType,
+            SubmitBulkRunRequest,
+        )
 
         if self.run is not None:
             if isinstance(self.run, Run):
@@ -420,7 +478,8 @@ class Run(YAMLTranslatableMixin):
                 flow_definition_data_store_name=path_uri.datastore,
                 flow_definition_blob_path=path_uri.path,
                 run_id=self.name,
-                run_display_name=self.display_name,
+                # will use user provided display name since PFS will have special logic to update it.
+                run_display_name=self._get_default_display_name(),
                 description=self.description,
                 tags=self.tags,
                 node_variant=self.variant,
@@ -433,6 +492,7 @@ class Run(YAMLTranslatableMixin):
                 environment_variables=self.environment_variables,
                 connections=self.connections,
                 flow_lineage_id=self._lineage_id,
+                run_display_name_generation_type=RunDisplayNameGenerationType.USER_PROVIDED_MACRO,
             )
         else:
             # upload via CodeOperations.create_or_update
@@ -440,7 +500,7 @@ class Run(YAMLTranslatableMixin):
             return SubmitBulkRunRequest(
                 flow_definition_data_uri=str(self.flow),
                 run_id=self.name,
-                run_display_name=self.display_name,
+                run_display_name=self._get_default_display_name(),
                 description=self.description,
                 tags=self.tags,
                 node_variant=self.variant,
@@ -453,6 +513,7 @@ class Run(YAMLTranslatableMixin):
                 environment_variables=self.environment_variables,
                 connections=self.connections,
                 flow_lineage_id=self._lineage_id,
+                run_display_name_generation_type=RunDisplayNameGenerationType.USER_PROVIDED_MACRO,
             )
 
     def _check_run_status_is_completed(self) -> None:

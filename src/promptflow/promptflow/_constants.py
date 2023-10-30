@@ -12,3 +12,6 @@ AOAI_API_KEY = "aoai-api-key"
 SERPAPI_API_KEY = "serpapi-api-key"
 CONTENT_SAFETY_API_KEY = "content-safety-api-key"
 ERROR_RESPONSE_COMPONENT_NAME = "promptflow"
+EXTENSION_UA = "prompt-flow-extension"
+
+DEFAULT_ENCODING = "utf-8"

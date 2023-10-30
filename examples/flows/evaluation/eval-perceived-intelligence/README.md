@@ -1,6 +1,6 @@
-# Percieved Intelligence Evaluation
+# Perceived Intelligence Evaluation
 
-This is a flow leverage llm to eval percieved intelligence.
+This is a flow leverage llm to eval perceived intelligence.
 Perceived intelligence is the degree to which a bot can impress the user with its responses, by showing originality, insight, creativity, knowledge, and adaptability.
 
 Tools used in this flow：
@@ -26,6 +26,8 @@ pf flow test --flow .
 ### 2. create flow run with multi line data
 
 ```bash
-pf run create --flow . --data ./data.jsonl --stream
+pf run create --flow . --data ./data.jsonl --column-mapping question='${data.question}' answer='${data.answer}' context='${data.context}' --stream
 ```
 
+You can also skip providing `column-mapping` if provided data has same column name as the flow.
+Reference [here](https://aka.ms/pf/column-mapping) for default behavior when `column-mapping` not provided in CLI.

@@ -32,7 +32,7 @@ class TestHandleOpenAIError:
             aoai_provider.chat(prompt=prompt, deployment_name="gpt-35-turbo")
         assert exc_info.value.error_codes == error_codes.split("/")
 
-    def test_aoai_authencation_error_with_bad_api_key(self, azure_open_ai_connection):
+    def test_aoai_authentication_error_with_bad_api_key(self, azure_open_ai_connection):
         azure_open_ai_connection.api_key = "hello"
         prompt_template = "please complete this sentence: world war II "
         raw_message = (
@@ -260,7 +260,7 @@ class TestHandleOpenAIError:
         assert mock_method.call_count == 1
         assert exc_info.value.error_codes == error_codes.split("/")
 
-    @pytest.mark.skip_if_no_key("open_ai_connection")
+    @pytest.mark.skip_if_no_api_key("open_ai_connection")
     def test_model_not_accept_functions_as_param(
             self, open_ai_connection, example_prompt_template, functions):
         with pytest.raises(WrappedOpenAIError) as exc_info:

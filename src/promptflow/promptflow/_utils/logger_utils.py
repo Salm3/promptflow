@@ -63,7 +63,7 @@ class CredentialScrubberFormatter(logging.Formatter):
     def _handle_customer_content(self, s: str, record: logging.LogRecord) -> str:
         """Handle customer content in log message.
 
-        Replace {customer_content} in log message with customer_content.
+        Derived class can override this method to handle customer content in log.
         """
         # If log record does not have "customer_content" field, return input logging string directly.
         if not hasattr(record, "customer_content"):
@@ -82,7 +82,10 @@ class CredentialScrubberFormatter(logging.Formatter):
         return s.replace("{customer_content}", customer_str)
 
     def _handle_traceback(self, s: str, record: logging.LogRecord) -> str:
-        """Do nothing."""
+        """Interface method for handling traceback in log message.
+
+        Derived class can override this method to handle traceback in log.
+        """
         return s
 
     def _convert_exception_to_str(self, ex: Exception) -> str:
@@ -287,11 +290,15 @@ def update_log_path(log_path: str, input_logger: logging.Logger = None):
     if input_logger:
         logger_list.append(input_logger)
     for logger_ in logger_list:
-        for wrapper in logger_.handlers:
-            if isinstance(wrapper, FileHandlerConcurrentWrapper):
-                handler: FileHandler = wrapper.handler
-                if handler:
-                    wrapper.handler = type(handler)(log_path, handler._formatter)
+        update_single_log_path(log_path, logger_)
+
+
+def update_single_log_path(log_path: str, logger_: logging.Logger):
+    for wrapper in logger_.handlers:
+        if isinstance(wrapper, FileHandlerConcurrentWrapper):
+            handler: FileHandler = wrapper.handler
+            if handler:
+                wrapper.handler = type(handler)(log_path, handler._formatter)
 
 
 def scrub_credentials(s: str):

@@ -4,16 +4,16 @@ from unittest.mock import patch
 
 import pytest
 
-from promptflow._core._errors import PackageToolNotFoundError
+from promptflow._core._errors import PackageToolNotFoundError, ToolLoadError
 from promptflow.contracts.run_info import Status
 from promptflow.executor import FlowExecutor
-from promptflow.executor._errors import NodeInputValidationError
+from promptflow.executor._errors import NodeInputValidationError, ResolveToolError
 from promptflow.executor.flow_executor import LineResult
 
 from ..utils import WRONG_FLOW_ROOT, get_flow_package_tool_definition, get_flow_sample_inputs, get_yaml_file
 
 PACKAGE_TOOL_BASE = Path(__file__).parent.parent / "package_tools"
-PACKAGE_TOOL_ENTRY = "promptflow.executor._tool_resolver.collect_package_tools"
+PACKAGE_TOOL_ENTRY = "promptflow._core.tools_manager.collect_package_tools"
 
 sys.path.insert(0, str(PACKAGE_TOOL_BASE.resolve()))
 
@@ -83,16 +83,18 @@ class TestPackageTool:
                 "Invalid inputs {'api'} in prompt template of node custom_llm_tool_with_duplicated_inputs. "
                 "These inputs are duplicated with the inputs of custom llm tool."
             )
-            with pytest.raises(NodeInputValidationError, match=msg):
+            with pytest.raises(ResolveToolError, match=msg) as e:
                 FlowExecutor.create(get_yaml_file(flow_folder), dev_connections)
+            assert isinstance(e.value.inner_exception, NodeInputValidationError)
 
     @pytest.mark.parametrize(
-        "flow_folder, line_input, error_class, error_message",
+        "flow_folder, error_class, inner_class, error_message",
         [
             (
                 "wrong_tool_in_package_tools",
-                {"text": "Best beijing hotel"},
+                ResolveToolError,
                 PackageToolNotFoundError,
+                "Tool load failed in 'search_by_text': (PackageToolNotFoundError) "
                 "Package tool 'promptflow.tools.serpapi.SerpAPI.search_11' is not found in the current environment. "
                 "All available package tools are: "
                 "['promptflow.tools.azure_content_safety.AzureContentSafety.analyze_text', "
@@ -100,8 +102,9 @@ class TestPackageTool:
             ),
             (
                 "wrong_package_in_package_tools",
-                {"text": "Best beijing hotel"},
+                ResolveToolError,
                 PackageToolNotFoundError,
+                "Tool load failed in 'search_by_text': (PackageToolNotFoundError) "
                 "Package tool 'promptflow.tools.serpapi11.SerpAPI.search' is not found in the current environment. "
                 "All available package tools are: "
                 "['promptflow.tools.azure_content_safety.AzureContentSafety.analyze_text', "
@@ -109,22 +112,35 @@ class TestPackageTool:
             ),
         ],
     )
-    def test_package_tool_execution(self, flow_folder, line_input, error_class, error_message, dev_connections):
+    def test_package_tool_execution(self, flow_folder, error_class, inner_class, error_message, dev_connections):
         def mock_collect_package_tools(keys=None):
-            if keys is None:
-                return {
-                    "promptflow.tools.azure_content_safety.AzureContentSafety.analyze_text": None,
-                    "promptflow.tools.azure_detect.AzureDetect.get_language": None,
-                }  # Mock response for specific argument
-            else:
-                # Call the actual function with keys
-                from promptflow._core.tools_manager import collect_package_tools
-
-                return collect_package_tools(keys)
+            return {
+                "promptflow.tools.azure_content_safety.AzureContentSafety.analyze_text": None,
+                "promptflow.tools.azure_detect.AzureDetect.get_language": None,
+            }
 
         with patch(PACKAGE_TOOL_ENTRY, side_effect=mock_collect_package_tools):
-            # ret = collect_package_tools()
-            # print("hello" + json.dumps(ret))
             with pytest.raises(error_class) as exce_info:
                 FlowExecutor.create(get_yaml_file(flow_folder, WRONG_FLOW_ROOT), dev_connections)
+            if isinstance(exce_info.value, ResolveToolError):
+                assert isinstance(exce_info.value.inner_exception, inner_class)
             assert error_message == exce_info.value.message
+
+    @pytest.mark.parametrize(
+        "flow_folder, error_message",
+        [
+            (
+                "tool_with_init_error",
+                "Tool load failed in 'tool_with_init_error': "
+                "(ToolLoadError) Failed to load package tool 'Tool with init error': (Exception) Tool load error.",
+            )
+        ],
+    )
+    def test_package_tool_load_error(self, flow_folder, error_message, dev_connections, mocker):
+        flow_folder = PACKAGE_TOOL_BASE / flow_folder
+        package_tool_definition = get_flow_package_tool_definition(flow_folder)
+        with mocker.patch(PACKAGE_TOOL_ENTRY, return_value=package_tool_definition):
+            with pytest.raises(ResolveToolError) as exce_info:
+                FlowExecutor.create(get_yaml_file(flow_folder), dev_connections)
+            assert isinstance(exce_info.value.inner_exception, ToolLoadError)
+            assert exce_info.value.message == error_message

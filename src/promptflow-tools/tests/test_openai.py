@@ -10,7 +10,7 @@ def openai_provider(open_ai_connection) -> OpenAI:
 
 
 @pytest.mark.usefixtures("use_secrets_config_file")
-@pytest.mark.skip_if_no_key("open_ai_connection")
+@pytest.mark.skip_if_no_api_key("open_ai_connection")
 class TestOpenAI:
     def test_openai_completion(self, openai_provider):
         prompt_template = "please complete this sentence: world war II "
@@ -30,7 +30,7 @@ class TestOpenAI:
             model="gpt-3.5-turbo",
             max_tokens=32,
             temperature=0,
-            user_input="Fill in more detalis about trend 2.",
+            user_input="Fill in more details about trend 2.",
             chat_history=chat_history,
         )
         assert "details about trend 2" in result.lower()
@@ -41,7 +41,7 @@ class TestOpenAI:
             model="gpt-3.5-turbo",
             max_tokens=32,
             temperature=0,
-            user_input="Fill in more detalis about trend 2.",
+            user_input="Fill in more details about trend 2.",
             chat_history=chat_history,
             stream=True,
         )
